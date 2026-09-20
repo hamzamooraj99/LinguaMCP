@@ -191,10 +191,17 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,valid-type]
 
         authorization = request.headers.get("authorization", "")
         if not self._is_authorized(authorization):
+            challenge = "Bearer"
+            if self._oauth_password is not None:
+                resource_metadata = (
+                    f"{_oauth_base_url(request)}"
+                    "/.well-known/oauth-protected-resource"
+                )
+                challenge = f'Bearer resource_metadata="{resource_metadata}"'
             return JSONResponse(  # type: ignore[misc]
                 {"error": "Unauthorized"},
                 status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
+                headers={"WWW-Authenticate": challenge},
             )
         return await call_next(request)
 

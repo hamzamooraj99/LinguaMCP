@@ -10,10 +10,12 @@ from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from server import (
     ALLOWED_FILES,
+    BearerAuthMiddleware,
     MCP_SERVER_INSTRUCTIONS,
     MEMORY_PROTOCOL,
     mcp,
@@ -548,6 +550,24 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertEqual(
             OAUTH_AUTH_CODES["test-code"]["redirect_uri"],
             form["redirect_uri"],
+        )
+
+    def test_oauth_unauthorized_response_advertises_resource_metadata(self) -> None:
+        request = SimpleNamespace(
+            base_url="https://debian-srv.taila5b98b.ts.net/",
+            headers={},
+            method="GET",
+            url=SimpleNamespace(path="/mcp"),
+        )
+        middleware = BearerAuthMiddleware(lambda: None, oauth_password="password")
+
+        response = asyncio.run(middleware.dispatch(request, lambda _: None))
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.headers["www-authenticate"],
+            'Bearer resource_metadata="https://debian-srv.taila5b98b.ts.net/'
+            '.well-known/oauth-protected-resource"',
         )
 
     def test_oauth_token_exchange_rejects_bad_pkce(self) -> None:
