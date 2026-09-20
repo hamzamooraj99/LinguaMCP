@@ -246,10 +246,12 @@ def _oauth_authorization_metadata(request: Request) -> dict[str, Any]:
         "issuer": base_url,
         "authorization_endpoint": f"{base_url}/oauth/authorize",
         "token_endpoint": f"{base_url}/oauth/token",
+        "client_id_metadata_document_supported": True,
         "response_types_supported": ["code"],
         "grant_types_supported": ["authorization_code"],
-        "code_challenge_methods_supported": ["S256", "plain"],
+        "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "scopes_supported": ["linguamcp"],
     }
 
 
@@ -258,6 +260,7 @@ def _oauth_protected_resource_metadata(request: Request) -> dict[str, Any]:
     return {
         "resource": f"{base_url}/mcp",
         "authorization_servers": [base_url],
+        "scopes_supported": ["linguamcp"],
         "bearer_methods_supported": ["header"],
     }
 
@@ -271,6 +274,8 @@ def _oauth_authorize_form(request: Request) -> Response:
         "state": query.get("state", ""),
         "code_challenge": query.get("code_challenge", ""),
         "code_challenge_method": query.get("code_challenge_method", "plain"),
+        "resource": query.get("resource", ""),
+        "scope": query.get("scope", ""),
     }
     error = _validate_authorize_values(values)
     if error:
@@ -325,6 +330,8 @@ def _oauth_authorize_submit(
         "state": str(form.get("state", "")),
         "code_challenge": str(form.get("code_challenge", "")),
         "code_challenge_method": str(form.get("code_challenge_method", "plain")),
+        "resource": str(form.get("resource", "")),
+        "scope": str(form.get("scope", "")),
     }
     error = _validate_authorize_values(values)
     if error:
@@ -336,6 +343,8 @@ def _oauth_authorize_submit(
         "redirect_uri": values["redirect_uri"],
         "code_challenge": values["code_challenge"],
         "code_challenge_method": values["code_challenge_method"],
+        "resource": values["resource"],
+        "scope": values["scope"],
         "expires_at": time.time() + OAUTH_CODE_TTL_SECONDS,
     }
     redirect_params = {"code": code}
@@ -380,6 +389,7 @@ def _oauth_token_response(form: dict[str, Any]) -> Response:
     redirect_uri = str(form.get("redirect_uri", ""))
     client_id = str(form.get("client_id", ""))
     code_verifier = str(form.get("code_verifier", ""))
+    resource = str(form.get("resource", ""))
 
     if grant_type != "authorization_code":
         return _oauth_error("unsupported_grant_type", "Only authorization_code is supported.")
@@ -392,6 +402,8 @@ def _oauth_token_response(form: dict[str, Any]) -> Response:
         return _oauth_error("invalid_grant", "redirect_uri does not match.")
     if client_id and client_id != code_record["client_id"]:
         return _oauth_error("invalid_grant", "client_id does not match.")
+    if resource != code_record.get("resource", ""):
+        return _oauth_error("invalid_grant", "resource does not match.")
     if not _verify_pkce(
         code_record["code_challenge"],
         code_record["code_challenge_method"],
@@ -402,6 +414,8 @@ def _oauth_token_response(form: dict[str, Any]) -> Response:
     access_token = secrets.token_urlsafe(48)
     OAUTH_ACCESS_TOKENS[access_token] = {
         "client_id": code_record["client_id"],
+        "resource": code_record.get("resource", ""),
+        "scope": code_record.get("scope", ""),
         "expires_at": time.time() + OAUTH_TOKEN_TTL_SECONDS,
     }
     return JSONResponse(  # type: ignore[misc]
@@ -409,7 +423,7 @@ def _oauth_token_response(form: dict[str, Any]) -> Response:
             "access_token": access_token,
             "token_type": "Bearer",
             "expires_in": OAUTH_TOKEN_TTL_SECONDS,
-            "scope": "linguamcp",
+            "scope": code_record.get("scope", "") or "linguamcp",
         }
     )
 

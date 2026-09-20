@@ -38,6 +38,7 @@ from server import (
     save_checkpoint,
     write_file,
     write_note,
+    _oauth_authorization_metadata,
     _oauth_authorize_submit,
     _oauth_token_response,
     _run_tool,
@@ -508,6 +509,8 @@ class StorageVerificationTests(unittest.TestCase):
             "redirect_uri": "https://chatgpt.com/oauth/callback",
             "code_challenge": challenge,
             "code_challenge_method": "S256",
+            "resource": "https://example.com/mcp",
+            "scope": "linguamcp",
             "expires_at": 9_999_999_999,
         }
 
@@ -518,6 +521,7 @@ class StorageVerificationTests(unittest.TestCase):
                 "redirect_uri": "https://chatgpt.com/oauth/callback",
                 "client_id": "chatgpt",
                 "code_verifier": verifier,
+                "resource": "https://example.com/mcp",
             }
         )
 
@@ -525,6 +529,19 @@ class StorageVerificationTests(unittest.TestCase):
         body = json.loads(response.body.decode("utf-8"))
         self.assertEqual(body["token_type"], "Bearer")
         self.assertIn(body["access_token"], OAUTH_ACCESS_TOKENS)
+        self.assertEqual(
+            OAUTH_ACCESS_TOKENS[body["access_token"]]["resource"],
+            "https://example.com/mcp",
+        )
+
+    def test_oauth_metadata_advertises_cimd_for_chatgpt(self) -> None:
+        request = SimpleNamespace(base_url="https://example.com/")
+
+        metadata = _oauth_authorization_metadata(request)
+
+        self.assertTrue(metadata["client_id_metadata_document_supported"])
+        self.assertEqual(metadata["code_challenge_methods_supported"], ["S256"])
+        self.assertEqual(metadata["scopes_supported"], ["linguamcp"])
 
     def test_oauth_authorization_redirect_preserves_callback_and_state(self) -> None:
         form = {
@@ -535,6 +552,8 @@ class StorageVerificationTests(unittest.TestCase):
             "state": "oauth_s_6aaf7d13d8b48191be85a86636052ad5",
             "code_challenge": "challenge",
             "code_challenge_method": "S256",
+            "resource": "https://debian-srv.taila5b98b.ts.net/mcp",
+            "scope": "linguamcp",
         }
 
         with patch("server.secrets.token_urlsafe", return_value="test-code"):
@@ -576,6 +595,8 @@ class StorageVerificationTests(unittest.TestCase):
             "redirect_uri": "https://chatgpt.com/oauth/callback",
             "code_challenge": "expected",
             "code_challenge_method": "plain",
+            "resource": "",
+            "scope": "",
             "expires_at": 9_999_999_999,
         }
 
