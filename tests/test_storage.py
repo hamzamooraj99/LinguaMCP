@@ -10,6 +10,7 @@ from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from server import (
     ALLOWED_FILES,
@@ -35,6 +36,7 @@ from server import (
     save_checkpoint,
     write_file,
     write_note,
+    _oauth_authorize_submit,
     _oauth_token_response,
     _run_tool,
 )
@@ -521,6 +523,32 @@ class StorageVerificationTests(unittest.TestCase):
         body = json.loads(response.body.decode("utf-8"))
         self.assertEqual(body["token_type"], "Bearer")
         self.assertIn(body["access_token"], OAUTH_ACCESS_TOKENS)
+
+    def test_oauth_authorization_redirect_preserves_callback_and_state(self) -> None:
+        form = {
+            "password": "approval-password",
+            "response_type": "code",
+            "client_id": "chatgpt",
+            "redirect_uri": "https://chatgpt.com/connector/oauth/callback?existing=1",
+            "state": "oauth_s_6aaf7d13d8b48191be85a86636052ad5",
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        }
+
+        with patch("server.secrets.token_urlsafe", return_value="test-code"):
+            response = _oauth_authorize_submit(None, form, "approval-password")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.headers["location"],
+            "https://chatgpt.com/connector/oauth/callback?existing=1"
+            "&code=test-code"
+            "&state=oauth_s_6aaf7d13d8b48191be85a86636052ad5",
+        )
+        self.assertEqual(
+            OAUTH_AUTH_CODES["test-code"]["redirect_uri"],
+            form["redirect_uri"],
+        )
 
     def test_oauth_token_exchange_rejects_bad_pkce(self) -> None:
         OAUTH_AUTH_CODES["test-code"] = {

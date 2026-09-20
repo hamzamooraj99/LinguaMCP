@@ -7,6 +7,7 @@ import base64
 import hashlib
 import html
 import json
+import logging
 import os
 import secrets
 import time
@@ -167,6 +168,7 @@ OAUTH_AUTH_CODES: dict[str, dict[str, Any]] = {}
 OAUTH_ACCESS_TOKENS: dict[str, dict[str, Any]] = {}
 OAUTH_CODE_TTL_SECONDS = 300
 OAUTH_TOKEN_TTL_SECONDS = 86_400
+OAUTH_LOGGER = logging.getLogger("uvicorn.error")
 
 
 class BearerAuthMiddleware(BaseHTTPMiddleware):  # type: ignore[misc,valid-type]
@@ -333,10 +335,15 @@ def _oauth_authorize_submit(
     if values["state"]:
         redirect_params["state"] = values["state"]
     separator = "&" if "?" in values["redirect_uri"] else "?"
-    return RedirectResponse(  # type: ignore[misc]
-        values["redirect_uri"] + separator + urlencode(redirect_params),
-        status_code=302,
+    redirect_url = values["redirect_uri"] + separator + urlencode(redirect_params)
+    response = RedirectResponse(redirect_url, status_code=302)  # type: ignore[misc]
+    redacted_location = response.headers["location"].replace(
+        urlencode({"code": code}),
+        "code=<redacted>",
+        1,
     )
+    OAUTH_LOGGER.info("OAuth authorization redirect Location: %s", redacted_location)
+    return response
 
 
 def _validate_authorize_values(values: dict[str, str]) -> str | None:
