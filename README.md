@@ -167,7 +167,15 @@ Run this once:
 setup_launcher.cmd
 ```
 
-The setup creates `.venv/`, installs the dependencies, publishes the launcher, and adds a branded `LinguaMCP MCP` shortcut to the current user's desktop. Open the shortcut to:
+The setup creates `.venv/`, installs the dependencies, publishes the launcher, and adds a branded `LinguaMCP MCP` shortcut to the current user's desktop. Before opening the launcher, set these Windows user environment variables and reopen the launcher:
+
+- `LINGUAMCP_OAUTH_PASSWORD` — the password used to approve a client.
+- `LINGUAMCP_OAUTH_CLIENTS_FILE` — a private JSON file listing the approved client ID and its exact callback URL.
+- `LINGUAMCP_PUBLIC_BASE_URL` — the public HTTPS origin for this server, without a path.
+
+The callback must come from the OAuth client registration you intend to use. Do not guess it or add a broad wildcard. The launcher checks these settings before it starts the server.
+
+Open the shortcut to:
 
 - start the FastMCP server in OAuth HTTP mode
 - stop the running server and its child process
@@ -180,7 +188,7 @@ The launcher runs this command without opening a terminal window:
 python server.py --http --oauth --allow-writes
 ```
 
-Before opening the launcher, define `LINGUAMCP_OAUTH_PASSWORD` as a Windows user environment variable. The launcher inherits it without storing the password in the repository. Closing the launcher stops the server.
+The launcher inherits the settings without storing them in the repository. Closing the launcher stops the server.
 
 ---
 
@@ -232,11 +240,27 @@ Clients must then send:
 Authorization: Bearer replace-with-a-long-random-secret
 ```
 
-For ChatGPT custom connectors that require OAuth, enable the built-in single-user OAuth flow:
+For a public OAuth client, enable the built-in flow with a deployment-owned registry. The registry maps one client ID to exact registered callback URLs:
 
 ```powershell
 $env:LINGUAMCP_OAUTH_PASSWORD = "replace-with-a-long-random-password"
+$env:LINGUAMCP_OAUTH_CLIENTS_FILE = "C:\private\linguamcp-oauth-clients.json"
+$env:LINGUAMCP_PUBLIC_BASE_URL = "https://<your-tunnel-host>"
+# Optional. The default is tutor_data/.oauth/state.sqlite3.
+$env:LINGUAMCP_OAUTH_STATE_PATH = "C:\private\linguamcp-oauth-state.sqlite3"
 python server.py --http --oauth --allow-writes
+```
+
+The JSON file must have this shape. Replace both example values with the client ID and callback URI from the actual client registration:
+
+```json
+{
+  "clients": {
+    "client-id-from-registration": {
+      "redirect_uris": ["exact-callback-uri-from-registration"]
+    }
+  }
+}
 ```
 
 Use your public tunnel host with these paths:
@@ -247,7 +271,7 @@ Auth URL:   https://<your-tunnel-host>/oauth/authorize
 Token URL:  https://<your-tunnel-host>/oauth/token
 ```
 
-Use any stable client ID, such as `linguamcp-chatgpt`. Leave the client secret blank if your client allows it. During approval, enter the value from `LINGUAMCP_OAUTH_PASSWORD`.
+Configure the client with its registered client ID, the URLs above, no client secret, and PKCE method `S256`. The server rejects unregistered IDs, callbacks that differ by even one character, and other PKCE methods. During approval, enter the value from `LINGUAMCP_OAUTH_PASSWORD`.
 
 OAuth discovery metadata is exposed at:
 
@@ -256,7 +280,13 @@ OAuth discovery metadata is exposed at:
 /.well-known/oauth-protected-resource
 ```
 
-The OAuth flow is intentionally single-user and local-first. It does not depend on an external identity provider.
+OAuth grants are stored in a private SQLite file outside language folders. Existing in-memory grants are not migrated, so OAuth clients must authorize again after upgrading. Access tokens last 24 hours; refresh tokens last up to 30 days and rotate on use. Replaying an old refresh token revokes that grant family, so the client must authorize again. To revoke all saved OAuth grants locally, stop the server and run:
+
+```powershell
+python server.py --revoke-oauth-grants
+```
+
+The revoke command exits without starting the server. It uses `LINGUAMCP_OAUTH_STATE_PATH` when set. Static bearer-token authentication remains a separate option and does not use this OAuth database. OAuth mode uses a static client registry; it does not implement dynamic client registration.
 
 </details>
 
@@ -267,18 +297,24 @@ The OAuth flow is intentionally single-user and local-first. It does not depend 
 | Tool | Purpose |
 | --- | --- |
 | `initialize_language_profile` | Create a complete language profile from templates and supplied learner details. |
-| `read_language_context` | Return the memory protocol and bounded active teaching context without loading custom notes, permanent logs, or archives. |
-| `write_language_file` | Replace one whitelisted Markdown file, including homework and delivery drafts. |
+| `read_language_context` | Return the memory protocol and bounded active teaching context, including an optional current contract. It excludes custom notes, permanent logs, and archives. |
+| `read_language_file` | Read a context file in pages that share one content hash. |
+| `write_language_file` | Replace one allowed Markdown file, including homework and delivery drafts, after checking its latest file hash. |
 | `list_language_notes` | List custom Markdown notes stored for a language. |
 | `read_language_note` | Read one custom Markdown note before using or updating it. |
 | `write_language_note` | Create or replace a custom Markdown note displayed under **Other** in the viewer. |
-| `append_session_log` | Create a timestamped session log, update `latest-summary.md`, and reset `active-session.md`. |
-| `finalize_lesson` | Enforce the update-or-unchanged checklist, write cumulative learner memory and homework, then save the session summary. |
-| `save_session_checkpoint` | Replace the concise active-session state during a long lesson. |
+| `append_session_log` | Save a paused session and update `latest-summary.md` while preserving `active-session.md`. |
+| `list_language_sessions` / `read_language_session` | Find older session logs and read them in version-checked pages. |
+| `finalize_lesson` | Check the six-file update checklist, then save progress, homework, summary, session log, checkpoint reset, and contract completion as one recoverable operation. |
+| `save_session_checkpoint` | Replace the concise active-session state during a long or unfinished lesson. |
 | `get_language_context_status` | Report character counts and recommend compaction when files grow large. |
 | `compact_language_file` | Archive a complete cumulative file and replace it with a concise model-supplied version. |
 | `list_language_file_archives` | List validated historical archive versions for one file. |
 | `read_language_file_archive` | Read one validated archive file on demand. |
+| `create_lesson_contract` | Create or intentionally replace the temporary scope and evidence rules for the current lesson. |
+| `read_lesson_contract` | Read contract identity and bounded content pages. |
+| `update_lesson_contract_state` | Record teaching-state changes and clear an older assessment. |
+| `assess_lesson_contract` | Record evidence for every required skill and return a mastery record when the completion rules pass. |
 | `list_languages` | Return available language directories alphabetically. |
 
 Language identifiers are normalized to lowercase and may contain only letters, digits, and hyphens. Learner-memory filenames come from a fixed whitelist. Custom notes are restricted to simple `.md` filenames directly inside the language's `notes/` directory, so callers cannot write arbitrary paths.
@@ -291,11 +327,43 @@ LinguaMCP keeps active context small and recoverable:
 
 - `active-session.md`, `latest-summary.md`, `latest-homework.md`, and delivery drafts are bounded because they are **replaced**, not appended.
 - `sessions/` stores **permanent** timestamped lesson logs.
-- `archives/` stores **full pre-compaction** versions of cumulative files.
+- `archives/` stores **complete previous versions** of cumulative files before replacement or compaction.
+- `current-lesson-contract.md` stores only the current temporary lesson contract. It stays out of ordinary writes and compaction; creating the next contract replaces it after the previous one is completed.
+- `.backups/`, `.transactions/`, and `.operations/` hold private recovery copies, prepared saves, and retry receipts. They are hidden from the viewer and learner-memory tools.
 - `notes/` stores optional custom Markdown references, which the viewer displays under **Other**. Use `list_language_notes` and `read_language_note` before replacing an existing note.
 - Profile, lesson plan, progress, vocabulary, mistakes, and scenarios can grow over time, so the status tool flags large files for model-led compaction.
 
 Compaction is deliberately model-led: Python archives the original and writes the replacement supplied by the AI. It does not decide what learning content matters.
+
+Reads return whole-file SHA-256 versions and writes require the version from the read used to prepare the replacement. A stale write is rejected so it cannot silently replace newer notes. The tutor rereads and merges after a conflict. Large files can be read in 16,000-character pages; full context is returned only when it fits the 64,000-character response limit. Cumulative memory is limited to 128,000 characters per file, session/checkpoint/homework/summary and delivery files to 16,000 characters, notes to 128,000 characters, and a contract to 128 KiB.
+
+The main failure responses are deliberate: a **Version conflict** means a file or contract changed after it was read; reread and merge. `context_too_large` returns no partial lesson context; use the status tool and bounded file reads. `recovery_required` means an interrupted save must be completed by a writable server before using that language again; keep the affected files and recovery folders intact while it recovers.
+
+Create a contract before teaching a new lesson. It sets required skills, their evidence level, the lesson boundary, deferred topics, and the completion rule. The tutor assesses every skill from what the learner actually did. The server checks the assessment structure and readiness but cannot confirm that the reported evidence is true. The passing mastery block belongs in the full `02-progress.md` replacement. Older workspaces without a contract remain readable and can still use finalization after adopting its new version and operation fields.
+
+Only `finalize_lesson` completes a contracted lesson and resets the checkpoint. A paused `append_session_log` keeps the checkpoint so the tutor can resume later. Finalization and standalone logging both need a client-generated UUID operation ID. A retry must reuse that ID and the exact original payload; a deliberate later save needs a new ID. One writable server is allowed per data root so its recovery journal can finish interrupted saves safely.
+
+### Save-call compatibility
+
+Existing write calls now need the exact file version returned by context or a file read. `initialize_language_profile` needs `expected_versions` when replacing an existing profile or plan. `append_session_log` takes `expected_versions` for `latest-summary.md` plus `operation_id`. `finalize_lesson` takes hashes for all six cumulative files, homework, latest summary, checkpoint, and the contract when present, plus `operation_id`; a contracted lesson also needs `expected_contract_version`, which is the contract lifecycle token, not its file hash. A same-ID retry must send the original versions and unchanged payload.
+
+### Lesson contract format
+
+The contract file contains a JSON metadata fence followed by tutor-authored Markdown. Its body must have exactly one nonempty section for each heading: `Lesson Purpose`, `Required Vocabulary and Constructions`, `Prior Material to Interleave`, `Suggested Teaching Progression`, `Retrieval and Practice Requirements`, `Scope Boundaries`, `Deferred Topics`, `Optional Enrichment`, `Critical Gaps`, and `Completion Rule`.
+
+The contract tools accept these fields:
+
+```text
+create_lesson_contract(language, lesson_id, lesson_title, contract_markdown, competencies, expected_version="")
+read_lesson_contract(language, offset_chars=0, limit_chars=16000, expected_file_version=None)
+update_lesson_contract_state(language, expected_version, competency_updates)
+assess_lesson_contract(language, expected_version, competencies, unresolved_critical_gaps, completion_rule_met, carry_forward_weaknesses)
+finalize_lesson(language, session_markdown, homework_markdown, updates, unchanged_files, expected_versions, operation_id, expected_contract_version="")
+```
+
+Each `competencies` entry has exactly `id` (lowercase ID), `criterion` (text), `critical` (boolean), and `required_evidence` (`recognized`, `supported`, `independent`, or `delayed_or_mixed`). Each state update has `competency_id`, `status`, and `note`; status is `not_introduced`, `introduced`, `practising`, `demonstrated`, `weak`, or `delayed_retest_required`. Each assessment entry has `competency_id`, `criterion_met` (boolean), `evidence_level` (`not_observed`, `introduced`, `recognized`, `supported`, `independent`, or `delayed_or_mixed`), and a short `evidence` explanation. Assess every competency exactly once. `unresolved_critical_gaps` uses competency IDs; `completion_rule_met` is boolean; `carry_forward_weaknesses` is a list of short notes.
+
+File hashes and contract tokens are separate: create, state, and assessment calls use the contract's current `version_token`; subsequent finalization also sends the latest `file_version` in `expected_versions`. A state update clears the previous assessment. A completed contract remains readable with status `completed`; create the next lesson using its current token, which gives the new lesson a new identity and resets its states and assessment.
 
 ---
 
@@ -329,7 +397,13 @@ Run the test suite:
 python -m unittest discover -s tests -v
 ```
 
-The tests verify initialization, safe writes, invalid path rejection, UTF-8 preservation, session logging, compaction archives, runtime security flags, and OAuth token handling.
+The tests use temporary learner folders and OAuth databases to check versions, backups, interrupted-save recovery, session history, lesson assessment and completion, redirect/PKCE validation, token rotation/revocation, and viewer navigation. They do not alter learner folders or production OAuth data.
+
+Run the viewer stale-navigation checks with:
+
+```powershell
+node --test tests/test_viewer_navigation.mjs
+```
 
 ---
 

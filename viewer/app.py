@@ -18,9 +18,11 @@ from .storage import (
     DocumentTooLargeError,
     InvalidRequestError,
     LanguageNotFoundError,
+    RecoveryUnavailableError,
     StorageFailureError,
     ViewerStorageError,
     find_document,
+    ensure_language_ready,
     list_document_groups,
     list_languages,
     read_document,
@@ -62,6 +64,8 @@ def _storage_error_response(error: Exception) -> JSONResponse:
         return _error_response(error, 404)
     if isinstance(error, DocumentTooLargeError):
         return _error_response(error, 413)
+    if isinstance(error, RecoveryUnavailableError):
+        return _error_response(error, 503)
     if isinstance(error, ViewerStorageError):
         return _error_response(error, 500)
     return _error_response(StorageFailureError(), 500)
@@ -102,6 +106,7 @@ async def document(request: Request) -> JSONResponse:
             request.path_params["relative_path"],
             data_root=request.app.state.data_root,
         )
+        ensure_language_ready(language, data_root=request.app.state.data_root)
         source = read_document(record)
         payload: dict[str, Any] = {
             "language": language,

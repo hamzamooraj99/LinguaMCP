@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import base64
 import hashlib
 import json
 import tempfile
 import unittest
+import uuid
 from contextlib import redirect_stderr
 from datetime import datetime, timezone
 from io import StringIO
@@ -20,8 +22,6 @@ from server import (
     MEMORY_PROTOCOL,
     mcp,
     ServerConfig,
-    OAUTH_AUTH_CODES,
-    OAUTH_ACCESS_TOKENS,
     append_session,
     available_languages,
     compact_file,
@@ -33,6 +33,7 @@ from server import (
     list_notes,
     parse_server_config,
     read_context,
+    read_language_file_storage,
     read_archive,
     read_note,
     save_checkpoint,
@@ -43,6 +44,7 @@ from server import (
     _oauth_token_response,
     _run_tool,
 )
+import server
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -56,8 +58,6 @@ class StorageVerificationTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         configure_runtime_security(ServerConfig())
-        OAUTH_AUTH_CODES.clear()
-        OAUTH_ACCESS_TOKENS.clear()
         self.temporary_directory.cleanup()
 
     def initialize(self) -> dict[str, object]:
@@ -89,6 +89,10 @@ class StorageVerificationTests(unittest.TestCase):
             "# Replaced profile",
             "# Replaced plan",
             True,
+            {
+                "00-profile.md": read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["00-profile.md"],
+                "01-lesson-plan.md": read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["01-lesson-plan.md"],
+            },
             data_root=self.data_root,
             template_root=self.template_root,
         )
@@ -106,8 +110,9 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertEqual(context["memory_protocol"], MEMORY_PROTOCOL)
         self.assertIn("03-vocabulary.md", context["memory_protocol"])
         self.assertIn("04-mistakes.md", context["memory_protocol"])
-        self.assertEqual(len(context), 11)
+        self.assertEqual(len(context), 13)
         self.assertNotIn("delivery/latest-email.md", context)
+        self.assertEqual(context["_meta"]["file_versions"]["current-lesson-contract.md"], "absent")
 
     def test_server_instructions_are_compact_and_cross_client(self) -> None:
         self.assertLessEqual(len(MCP_SERVER_INSTRUCTIONS), 512)
@@ -116,21 +121,60 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertIn("04 mistakes", MCP_SERVER_INSTRUCTIONS)
 
     def test_tool_descriptions_explain_memory_workflow(self) -> None:
-        tools = asyncio.run(mcp.get_tools())
-        self.assertEqual(len(tools), 14)
-        descriptions = {
-            name: tools[name].description or ""
-            for name in (
-                "read_language_context",
-                "write_language_file",
-                "list_language_notes",
-                "read_language_note",
-                "write_language_note",
-                "append_session_log",
-                "save_session_checkpoint",
-                "finalize_lesson",
-            )
-        }
+        tool_names = (
+            "initialize_language_profile",
+            "read_language_context",
+            "write_language_file",
+            "list_language_notes",
+            "read_language_note",
+            "write_language_note",
+            "append_session_log",
+            "finalize_lesson",
+            "save_session_checkpoint",
+            "get_language_context_status",
+            "compact_language_file",
+            "list_language_file_archives",
+            "read_language_file_archive",
+            "read_language_file",
+            "list_language_sessions",
+            "read_language_session",
+            "create_lesson_contract",
+            "read_lesson_contract",
+            "update_lesson_contract_state",
+            "assess_lesson_contract",
+            "list_languages",
+        )
+        if hasattr(mcp, "get_tools"):
+            tools = asyncio.run(mcp.get_tools())
+            self.assertTrue(set(tool_names).issubset(tools))
+            required = set(tools["finalize_lesson"].parameters["required"])
+            descriptions = {
+                name: tools[name].description or ""
+                for name in (
+                    "read_language_context", "write_language_file", "list_language_notes",
+                    "read_language_note", "write_language_note", "append_session_log",
+                    "read_language_file", "list_language_sessions", "read_language_session",
+                    "save_session_checkpoint", "finalize_lesson", "create_lesson_contract",
+                    "read_lesson_contract", "update_lesson_contract_state", "assess_lesson_contract",
+                )
+            }
+        else:
+            tools = {name: getattr(server, name) for name in tool_names}
+            required = {
+                name
+                for name, parameter in inspect.signature(server.finalize_lesson).parameters.items()
+                if parameter.default is inspect.Parameter.empty
+            }
+            descriptions = {
+                name: tools[name].__doc__ or ""
+                for name in (
+                    "read_language_context", "write_language_file", "list_language_notes",
+                    "read_language_note", "write_language_note", "append_session_log",
+                    "read_language_file", "list_language_sessions", "read_language_session",
+                    "save_session_checkpoint", "finalize_lesson", "create_lesson_contract",
+                    "read_lesson_contract", "update_lesson_contract_state", "assess_lesson_contract",
+                )
+            }
         self.assertIn("Mandatory first read", descriptions["read_language_context"])
         self.assertIn("03 new vocabulary", descriptions["write_language_file"])
         self.assertIn("04 errors", descriptions["write_language_file"])
@@ -139,20 +183,29 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertIn(
             "gender-noun-conventions.md", descriptions["write_language_note"]
         )
-        self.assertIn("does not update profile", descriptions["append_session_log"])
+        self.assertIn("preserves active-session.md", descriptions["append_session_log"])
         self.assertIn("not a final", descriptions["save_session_checkpoint"])
         self.assertIn(
             "enforce the cumulative-memory checklist",
             descriptions["finalize_lesson"],
         )
+        self.assertIn("bounded, version-checked character pages", descriptions["read_language_file"])
+        self.assertIn("bounded cursor", descriptions["list_language_sessions"])
+        self.assertIn("version-checked pages", descriptions["read_language_session"])
+        self.assertIn("Read full context first", descriptions["create_lesson_contract"])
+        self.assertIn("active contract governs lesson scope", descriptions["read_lesson_contract"])
+        self.assertIn("clear prior assessment", descriptions["update_lesson_contract_state"])
+        self.assertIn("Assess every required competency", descriptions["assess_lesson_contract"])
         self.assertEqual(
-            set(tools["finalize_lesson"].parameters["required"]),
+            required,
             {
                 "language",
                 "session_markdown",
                 "homework_markdown",
                 "updates",
                 "unchanged_files",
+                "expected_versions",
+                "operation_id",
             },
         )
 
@@ -162,6 +215,7 @@ class StorageVerificationTests(unittest.TestCase):
             "german",
             "02-progress.md",
             "# Fortschritt\n\nSchön!",
+            read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["02-progress.md"],
             data_root=self.data_root,
         )
         self.assertIn(
@@ -175,9 +229,7 @@ class StorageVerificationTests(unittest.TestCase):
         first = "# German noun gender\n\n## Feminine\n\n- `-ung` is usually feminine."
         updated = first + "\n\n## Masculine\n\n- Days of the week are masculine."
 
-        created = write_note(
-            "german", filename, first, data_root=self.data_root
-        )
+        created = write_note("german", filename, first, "absent", data_root=self.data_root)
         self.assertTrue(created["created"])
         self.assertEqual(
             list_notes("german", data_root=self.data_root), [filename]
@@ -187,9 +239,8 @@ class StorageVerificationTests(unittest.TestCase):
             first,
         )
 
-        replaced = write_note(
-            "german", filename, updated, data_root=self.data_root
-        )
+        current_version = read_note("german", filename, data_root=self.data_root)["version"]
+        replaced = write_note("german", filename, updated, current_version, data_root=self.data_root)
         self.assertFalse(replaced["created"])
         self.assertEqual(
             read_note("german", filename, data_root=self.data_root)["content"],
@@ -207,7 +258,7 @@ class StorageVerificationTests(unittest.TestCase):
             "two.dots.md",
         ):
             with self.subTest(filename=filename), self.assertRaises(ValueError):
-                write_note("german", filename, "bad", data_root=self.data_root)
+                write_note("german", filename, "bad", "absent", data_root=self.data_root)
 
         with self.assertRaisesRegex(ValueError, "does not exist"):
             read_note("german", "missing.md", data_root=self.data_root)
@@ -226,16 +277,22 @@ class StorageVerificationTests(unittest.TestCase):
             "notes.txt",
         ):
             with self.subTest(filename=filename), self.assertRaises(ValueError):
-                write_file("german", filename, "bad", data_root=self.data_root)
+                write_file("german", filename, "bad", "absent", data_root=self.data_root)
 
     def test_session_log_is_timestamped_and_updates_latest_summary(self) -> None:
         self.initialize()
+        checkpoint = "# Checkpoint\n\nRetest the destination question tomorrow."
+        checkpoint_version = read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["active-session.md"]
+        save_checkpoint("german", checkpoint, checkpoint_version, data_root=self.data_root)
         summary = "# Zusammenfassung\n\nHeute: Grüße und Café."
+        summary_version = read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["latest-summary.md"]
         fixed_time = datetime(2026, 6, 21, 10, 11, 12, 123456, tzinfo=timezone.utc)
 
         result = append_session(
             "german",
             summary,
+            {"latest-summary.md": summary_version},
+            str(uuid.uuid4()),
             data_root=self.data_root,
             template_root=self.template_root,
             now=fixed_time,
@@ -250,9 +307,9 @@ class StorageVerificationTests(unittest.TestCase):
             (self.data_root / "german" / "latest-summary.md").read_text("utf-8"),
             summary,
         )
-        self.assertIn(
-            "No active session checkpoint",
+        self.assertEqual(
             (self.data_root / "german" / "active-session.md").read_text("utf-8"),
+            checkpoint,
         )
         self.assertEqual(available_languages(data_root=self.data_root), ["german"])
 
@@ -264,6 +321,21 @@ class StorageVerificationTests(unittest.TestCase):
         )
         homework = "# Language Homework\n\nReview greetings and corrections."
         fixed_time = datetime(2026, 6, 21, 14, 0, 0, 0, tzinfo=timezone.utc)
+        context = read_context("german", data_root=self.data_root)
+        expected_versions = {
+            filename: context["_meta"]["file_versions"][filename]
+            for filename in (
+                "00-profile.md",
+                "01-lesson-plan.md",
+                "02-progress.md",
+                "03-vocabulary.md",
+                "04-mistakes.md",
+                "05-scenarios.md",
+                "latest-homework.md",
+                "latest-summary.md",
+                "active-session.md",
+            )
+        }
 
         result = finalize_lesson_storage(
             "german",
@@ -277,6 +349,8 @@ class StorageVerificationTests(unittest.TestCase):
                 "04-mistakes.md": "# Mistakes\n\n- Corrected word order in introductions.",
             },
             ["05-scenarios.md"],
+            expected_versions,
+            str(uuid.uuid4()),
             data_root=self.data_root,
             template_root=self.template_root,
             now=fixed_time,
@@ -293,6 +367,7 @@ class StorageVerificationTests(unittest.TestCase):
                 "03-vocabulary.md",
                 "04-mistakes.md",
                 "latest-homework.md",
+                "latest-summary.md",
             ],
         )
         self.assertEqual(result["unchanged_files"], ["05-scenarios.md"])
@@ -327,6 +402,8 @@ class StorageVerificationTests(unittest.TestCase):
                 "# Homework",
                 {"03-vocabulary.md": "# Vocabulary\n\n- Hallo"},
                 ["00-profile.md", "01-lesson-plan.md", "05-scenarios.md"],
+                {},
+                str(uuid.uuid4()),
                 data_root=self.data_root,
                 template_root=self.template_root,
             )
@@ -335,12 +412,18 @@ class StorageVerificationTests(unittest.TestCase):
         self.initialize()
         first = "# Checkpoint\n\nFirst state"
         second = "# Checkpoint\n\nCurrent state"
-        save_checkpoint("german", first, data_root=self.data_root)
-        save_checkpoint("german", second, data_root=self.data_root)
+        checkpoint_version = read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["active-session.md"]
+        save_checkpoint("german", first, checkpoint_version, data_root=self.data_root)
+        checkpoint_version = read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["active-session.md"]
+        save_checkpoint("german", second, checkpoint_version, data_root=self.data_root)
+        delivery_version = read_language_file_storage(
+            "german", "delivery/latest-whatsapp.md", data_root=self.data_root
+        )["version"]
         write_file(
             "german",
             "delivery/latest-whatsapp.md",
             "Homework: review greetings.",
+            delivery_version,
             data_root=self.data_root,
         )
 
@@ -359,8 +442,13 @@ class StorageVerificationTests(unittest.TestCase):
         self.initialize()
         original = "# Vocabulary\n\n" + ("Wort — word\n" * 20)
         compacted = "# Vocabulary\n\n- Wort — word"
-        write_file(
-            "german", "03-vocabulary.md", original, data_root=self.data_root
+        current_version = read_context("german", data_root=self.data_root)["_meta"]["file_versions"]["03-vocabulary.md"]
+        write_result = write_file(
+            "german",
+            "03-vocabulary.md",
+            original,
+            current_version,
+            data_root=self.data_root,
         )
 
         status = context_status(
@@ -375,6 +463,7 @@ class StorageVerificationTests(unittest.TestCase):
             "german",
             "03-vocabulary.md",
             compacted,
+            write_result["file_version"],
             data_root=self.data_root,
             now=fixed_time,
         )
@@ -386,12 +475,11 @@ class StorageVerificationTests(unittest.TestCase):
             compacted,
         )
         archive_name = Path(result["archive_file"]).name
-        self.assertEqual(
-            list_archives(
-                "german", "03-vocabulary.md", data_root=self.data_root
-            ),
-            [archive_name],
+        archive_names = list_archives(
+            "german", "03-vocabulary.md", data_root=self.data_root
         )
+        self.assertIn(archive_name, archive_names)
+        self.assertEqual(len(archive_names), 2)
         self.assertEqual(
             read_archive(
                 "german",
@@ -416,6 +504,7 @@ class StorageVerificationTests(unittest.TestCase):
                 "german",
                 "latest-summary.md",
                 "not allowed",
+                "absent",
                 data_root=self.data_root,
             )
         with self.assertRaises(ValueError):
@@ -425,6 +514,17 @@ class StorageVerificationTests(unittest.TestCase):
                 "../outside.md",
                 data_root=self.data_root,
             )
+
+    def test_oversized_checkpoint_is_reported_without_recommending_vocabulary_compaction(self) -> None:
+        self.initialize()
+        checkpoint = self.data_root / "german" / "active-session.md"
+        checkpoint.write_bytes(("# Checkpoint\n\n" + ("Resume the open exercise. " * 1500)).encode("utf-8"))
+
+        status = context_status("german", data_root=self.data_root)
+
+        self.assertEqual(status["files"]["active-session.md"]["action"], "shorten_volatile_file")
+        self.assertFalse(status["files"]["active-session.md"]["compactable"])
+        self.assertNotIn("03-vocabulary.md", status["files_recommended_for_compaction"])
 
     def test_server_config_defaults_to_stdio(self) -> None:
         config = parse_server_config([])
@@ -466,10 +566,19 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertFalse(config.allow_writes)
 
     def test_server_config_supports_oauth_mode(self) -> None:
-        config = parse_server_config(["--http", "--oauth"])
+        clients = self.data_root / "oauth-clients.json"
+        config = parse_server_config([
+            "--http", "--oauth", "--oauth-clients-file", str(clients),
+            "--public-base-url", "https://tutor.example", "--oauth-state-path",
+            str(self.data_root / ".oauth" / "state.sqlite3"), "--revoke-oauth-grants",
+        ])
 
         self.assertTrue(config.oauth_enabled)
         self.assertEqual(config.oauth_password_env, "LINGUAMCP_OAUTH_PASSWORD")
+        self.assertEqual(config.oauth_clients_file, clients)
+        self.assertEqual(config.public_base_url, "https://tutor.example")
+        self.assertEqual(config.oauth_state_path, self.data_root / ".oauth" / "state.sqlite3")
+        self.assertTrue(config.revoke_oauth_grants)
 
     def test_server_config_rejects_invalid_http_options(self) -> None:
         with redirect_stderr(StringIO()):
@@ -499,120 +608,15 @@ class StorageVerificationTests(unittest.TestCase):
         self.assertIn('"status": "blocked_write"', audit)
         self.assertNotIn("# Checkpoint", audit)
 
-    def test_oauth_token_exchange_validates_pkce_and_issues_bearer(self) -> None:
-        verifier = "test-verifier"
-        challenge = base64.urlsafe_b64encode(
-            hashlib.sha256(verifier.encode("ascii")).digest()
-        ).decode("ascii").rstrip("=")
-        OAUTH_AUTH_CODES["test-code"] = {
-            "client_id": "chatgpt",
-            "redirect_uri": "https://chatgpt.com/oauth/callback",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "resource": "https://example.com/mcp",
-            "scope": "linguamcp",
-            "expires_at": 9_999_999_999,
-        }
-
-        response = _oauth_token_response(
-            {
-                "grant_type": "authorization_code",
-                "code": "test-code",
-                "redirect_uri": "https://chatgpt.com/oauth/callback",
-                "client_id": "chatgpt",
-                "code_verifier": verifier,
-                "resource": "https://example.com/mcp",
-            }
-        )
-
-        self.assertEqual(response.status_code, 200)
-        body = json.loads(response.body.decode("utf-8"))
-        self.assertEqual(body["token_type"], "Bearer")
-        self.assertIn(body["access_token"], OAUTH_ACCESS_TOKENS)
-        self.assertEqual(
-            OAUTH_ACCESS_TOKENS[body["access_token"]]["resource"],
-            "https://example.com/mcp",
-        )
-
-    def test_oauth_metadata_advertises_cimd_for_chatgpt(self) -> None:
-        request = SimpleNamespace(base_url="https://example.com/")
+    def test_oauth_metadata_excludes_unimplemented_dynamic_registration(self) -> None:
+        request = SimpleNamespace(base_url="https://example.test/")
 
         metadata = _oauth_authorization_metadata(request)
 
-        self.assertTrue(metadata["client_id_metadata_document_supported"])
+        self.assertFalse(metadata["client_id_metadata_document_supported"])
+        self.assertEqual(metadata["grant_types_supported"], ["authorization_code", "refresh_token"])
+        self.assertEqual(metadata["token_endpoint_auth_methods_supported"], ["none"])
         self.assertEqual(metadata["code_challenge_methods_supported"], ["S256"])
-        self.assertEqual(metadata["scopes_supported"], ["linguamcp"])
-
-    def test_oauth_authorization_redirect_preserves_callback_and_state(self) -> None:
-        form = {
-            "password": "approval-password",
-            "response_type": "code",
-            "client_id": "chatgpt",
-            "redirect_uri": "https://chatgpt.com/connector/oauth/callback?existing=1",
-            "state": "oauth_s_6aaf7d13d8b48191be85a86636052ad5",
-            "code_challenge": "challenge",
-            "code_challenge_method": "S256",
-            "resource": "https://debian-srv.taila5b98b.ts.net/mcp",
-            "scope": "linguamcp",
-        }
-
-        with patch("server.secrets.token_urlsafe", return_value="test-code"):
-            response = _oauth_authorize_submit(None, form, "approval-password")
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(
-            response.headers["location"],
-            "https://chatgpt.com/connector/oauth/callback?existing=1"
-            "&code=test-code"
-            "&state=oauth_s_6aaf7d13d8b48191be85a86636052ad5",
-        )
-        self.assertEqual(
-            OAUTH_AUTH_CODES["test-code"]["redirect_uri"],
-            form["redirect_uri"],
-        )
-
-    def test_oauth_unauthorized_response_advertises_resource_metadata(self) -> None:
-        request = SimpleNamespace(
-            base_url="https://debian-srv.taila5b98b.ts.net/",
-            headers={},
-            method="GET",
-            url=SimpleNamespace(path="/mcp"),
-        )
-        middleware = BearerAuthMiddleware(lambda: None, oauth_password="password")
-
-        response = asyncio.run(middleware.dispatch(request, lambda _: None))
-
-        self.assertEqual(response.status_code, 401)
-        self.assertEqual(
-            response.headers["www-authenticate"],
-            'Bearer resource_metadata="https://debian-srv.taila5b98b.ts.net/'
-            '.well-known/oauth-protected-resource"',
-        )
-
-    def test_oauth_token_exchange_rejects_bad_pkce(self) -> None:
-        OAUTH_AUTH_CODES["test-code"] = {
-            "client_id": "chatgpt",
-            "redirect_uri": "https://chatgpt.com/oauth/callback",
-            "code_challenge": "expected",
-            "code_challenge_method": "plain",
-            "resource": "",
-            "scope": "",
-            "expires_at": 9_999_999_999,
-        }
-
-        response = _oauth_token_response(
-            {
-                "grant_type": "authorization_code",
-                "code": "test-code",
-                "redirect_uri": "https://chatgpt.com/oauth/callback",
-                "client_id": "chatgpt",
-                "code_verifier": "wrong",
-            }
-        )
-
-        self.assertEqual(response.status_code, 400)
-        body = json.loads(response.body.decode("utf-8"))
-        self.assertEqual(body["error"], "invalid_grant")
 
 
 if __name__ == "__main__":

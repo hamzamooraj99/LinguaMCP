@@ -1,4 +1,5 @@
 import { httpDataSource } from "./http-data.js";
+import { createRouteNavigation } from "./navigation.js";
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -38,6 +39,8 @@ const state = {
   openGroups: {},
   theme: readTheme(),
 };
+
+const routeNavigation = createRouteNavigation(state.dataSource, applyRouteResult);
 
 function readTheme() {
   try {
@@ -194,68 +197,66 @@ function renderSidebar() {
   }).join("");
 }
 
-async function renderReader(languageId, requestedPath) {
-  const language = findLanguage(languageId);
-  if (!language) {
+function applyRouteResult(result) {
+  if (result.kind === "picker") {
     renderLanguagePicker();
     return;
   }
 
-  const languageChanged = state.languageId !== language.id;
-  if (languageChanged) state.openGroups = {};
-  app.classList.remove("is-picker");
-  pickerView.hidden = true;
-  readerView.hidden = false;
-  state.languageId = language.id;
-  state.languageLabel = language.label;
-  setReaderState({ loading: true });
-  readerKicker.textContent = `${language.label} · Learner memory`;
-  readerTitle.textContent = "Opening…";
-  readerPath.textContent = requestedPath || "";
-  documentContent.innerHTML = "";
-
-  try {
-    state.groups = await state.dataSource.listDocuments(language.id);
-    const selected = requestedPath && flattenDocuments(state.groups).find(({ path }) => path === requestedPath);
-    const target = requestedPath ? selected : firstDocument(state.groups);
-    if (!target) {
-      state.currentPath = null;
-      renderSidebar();
-      const missingDocument = Boolean(requestedPath);
-      setReaderState({ error: missingDocument ? "This Markdown document could not be found." : "This language has no Markdown documents yet." });
-      readerTitle.textContent = missingDocument ? "Document not found" : "No documents yet";
-      readerPath.textContent = "";
-      document.title = `${language.label} · LinguaMCP`;
-      return;
-    }
-
-    state.currentPath = target.path;
-    const targetGroup = target.group || state.groups.find((group) =>
-      group.documents.some((document) => document.path === target.path)
-    )?.id;
-    if (targetGroup) state.openGroups[targetGroup] = true;
+  if (result.kind === "loading") {
+    const languageChanged = state.languageId !== result.language.id;
+    if (languageChanged) state.openGroups = {};
+    app.classList.remove("is-picker");
+    pickerView.hidden = true;
+    readerView.hidden = false;
+    state.languageId = result.language.id;
+    state.languageLabel = result.language.label;
+    state.groups = [];
+    state.currentPath = result.requestedPath || null;
+    setReaderState({ loading: true });
+    readerKicker.textContent = `${result.language.label} · Learner memory`;
+    readerTitle.textContent = "Opening…";
+    readerPath.textContent = result.requestedPath || "";
+    documentContent.innerHTML = "";
     renderSidebar();
-    const documentData = await state.dataSource.getDocument(language.id, target.path);
-    readerTitle.textContent = documentData.label;
-    readerPath.textContent = documentData.path;
-    document.title = `${documentData.label} · ${language.label} · LinguaMCP`;
-    documentContent.innerHTML = documentData.html;
+    return;
+  }
+
+  if (result.kind === "missing" || result.kind === "empty") {
+    state.groups = result.groups;
+    state.currentPath = null;
+    renderSidebar();
+    const missingDocument = result.kind === "missing";
+    setReaderState({ error: missingDocument ? "This Markdown document could not be found." : "This language has no Markdown documents yet." });
+    readerTitle.textContent = missingDocument ? "Document not found" : "No documents yet";
+    readerPath.textContent = "";
+    document.title = `${result.language.label} · LinguaMCP`;
+    return;
+  }
+
+  if (result.kind === "document") {
+    state.groups = result.groups;
+    state.currentPath = result.target.path;
+    if (result.targetGroup) state.openGroups[result.targetGroup] = true;
+    renderSidebar();
+    readerTitle.textContent = result.documentData.label;
+    readerPath.textContent = result.documentData.path;
+    document.title = `${result.documentData.label} · ${result.language.label} · LinguaMCP`;
+    documentContent.innerHTML = result.documentData.html;
     setReaderState();
-  } catch (error) {
-    renderSidebar();
+    return;
+  }
+
+  if (result.kind === "error") {
     readerTitle.textContent = "Unable to open document";
-    readerPath.textContent = requestedPath || "";
-    setReaderState({ error: error.message === "document_not_found" ? "This Markdown document could not be found." : "This document could not be opened in the preview." });
+    readerPath.textContent = result.requestedPath || "";
+    setReaderState({ error: result.error.message === "document_not_found" ? "This Markdown document could not be found." : "This document could not be opened in the preview." });
   }
 }
 
-async function renderRoute() {
+function renderRoute() {
   const { languageId, path } = decodeHash();
-  if (!languageId) {
-    renderLanguagePicker();
-    return;
-  }
-  await renderReader(languageId, path);
+  return routeNavigation.render(languageId, path, state.languages);
 }
 
 function closeDrawer() {

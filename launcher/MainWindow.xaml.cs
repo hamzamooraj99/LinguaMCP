@@ -108,6 +108,17 @@ public partial class MainWindow : Window
             MessageBox.Show("Set LINGUAMCP_OAUTH_PASSWORD as a Windows user environment variable, then reopen the launcher.", "OAuth password missing", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
+        var oauthClientsFile = Environment.GetEnvironmentVariable("LINGUAMCP_OAUTH_CLIENTS_FILE");
+        if (string.IsNullOrWhiteSpace(oauthClientsFile) || !File.Exists(oauthClientsFile))
+        {
+            MessageBox.Show("Set LINGUAMCP_OAUTH_CLIENTS_FILE to a deployment-owned JSON registry of approved client IDs and exact callback URLs, then reopen the launcher.", "OAuth client registry missing", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("LINGUAMCP_PUBLIC_BASE_URL")))
+        {
+            MessageBox.Show("Set LINGUAMCP_PUBLIC_BASE_URL to the server's canonical HTTPS origin, then reopen the launcher.", "OAuth public URL missing", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
 
         SetStatus("Starting", "FastMCP is starting up...", "#FF5A00", false, false);
         lock (_logLock)

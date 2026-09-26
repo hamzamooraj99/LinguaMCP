@@ -240,6 +240,32 @@ class ViewerAPITests(unittest.TestCase):
             ],
         )
 
+    def test_current_lesson_contract_appears_as_current_memory(self) -> None:
+        self._write(
+            "german/current-lesson-contract.md",
+            "# Lesson Contract\n\nA temporary lesson scope.\n",
+        )
+        groups = self._json("GET", "/api/languages/german/documents")["groups"]
+        current = groups[0]["documents"]
+        contract = next(item for item in current if item["path"] == "current-lesson-contract.md")
+        self.assertEqual(contract["label"], "Lesson contract")
+
+        response = self.request(
+            "GET", "/api/languages/german/documents/current-lesson-contract.md"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("temporary lesson scope", response.json()["html"])
+
+    def test_pending_save_returns_recovery_required_without_paths(self) -> None:
+        pending = self.data_root / "german" / ".transactions" / "pending"
+        pending.mkdir(parents=True)
+
+        response = self.request("GET", "/api/languages/german/documents")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["error"]["code"], "recovery_required")
+        self.assertNotIn(str(self.data_root), response.text)
+
     def test_empty_directories_and_empty_markdown_are_supported(self) -> None:
         payload = self._json("GET", "/api/languages/japanese/documents")
         self.assertTrue(all(not group["documents"] for group in payload["groups"]))

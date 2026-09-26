@@ -38,6 +38,7 @@ CURRENT_LABELS = {
     "active-session.md": "Active session",
     "latest-summary.md": "Latest summary",
     "latest-homework.md": "Homework",
+    "current-lesson-contract.md": "Lesson contract",
 }
 
 DELIVERY_LABELS = {
@@ -93,6 +94,11 @@ class InvalidUTF8Error(UnreadableDocumentError):
 class StorageFailureError(ViewerStorageError):
     code = "storage_error"
     message = "The learner data could not be read."
+
+
+class RecoveryUnavailableError(ViewerStorageError):
+    code = "recovery_required"
+    message = "Memory is temporarily unavailable while a saved update is being recovered. Try again shortly."
 
 
 @dataclass(frozen=True)
@@ -275,8 +281,23 @@ def _language_directory(language: str, data_root: str | Path | None) -> Path:
     root = _root_path(data_root)
     for language_id, path in _scan_language_directories(root):
         if language_id == normalized:
+            _ensure_language_ready(path)
             return path
     raise LanguageNotFoundError
+
+
+def _ensure_language_ready(language_directory: Path) -> None:
+    transactions = language_directory / ".transactions"
+    pending = transactions / "pending"
+    if transactions.is_symlink() or pending.is_symlink():
+        raise RecoveryUnavailableError()
+    if pending.exists():
+        raise RecoveryUnavailableError()
+
+
+def ensure_language_ready(language: str, *, data_root: str | Path | None = None) -> None:
+    """Recheck recovery visibility immediately before returning document data."""
+    _ensure_language_ready(_language_directory(language, data_root))
 
 
 def _walk_markdown_files(language_directory: Path) -> Iterator[tuple[str, Path, os.stat_result]]:
