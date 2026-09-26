@@ -10,7 +10,9 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-CLIENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{1,128}$")
+# Client IDs are opaque; registered clients may use HTTPS URLs as IDs.
+# Exact registry matching, rather than the ID's shape, controls access.
+CLIENT_ID_PATTERN = re.compile(r"^[\x21-\x7e]{1,2048}$")
 PKCE_CHALLENGE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 PKCE_VERIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{43,128}$")
 LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})

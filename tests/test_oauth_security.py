@@ -40,9 +40,11 @@ class OAuthSecurityTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary_directory.cleanup()
 
-    def write_registry(self, redirects: list[str]) -> None:
+    def write_registry(
+        self, redirects: list[str], *, client_id: str = "test-client"
+    ) -> None:
         self.registry.write_text(
-            json.dumps({"clients": {"test-client": {"redirect_uris": redirects}}}),
+            json.dumps({"clients": {client_id: {"redirect_uris": redirects}}}),
             encoding="utf-8",
         )
 
@@ -79,6 +81,12 @@ class OAuthSecurityTests(unittest.TestCase):
         self.write_registry(["https://client.example/callback"])
         with self.assertRaises(OAuthConfigurationError):
             OAuthConfiguration.load(self.registry, "http://tutor.example", "/mcp")
+
+        for client_id in ("client with space", "bad\nclient", "x" * 2049):
+            with self.subTest(client_id=client_id[:40]):
+                self.write_registry(["https://client.example/callback"], client_id=client_id)
+                with self.assertRaises(OAuthConfigurationError):
+                    OAuthConfiguration.load(self.registry, "https://tutor.example", "/mcp")
 
     def test_http_oauth_state_must_be_outside_language_workspaces(self) -> None:
         self.write_registry(["http://127.0.0.1:8765/callback"])
@@ -122,8 +130,9 @@ class OAuthSecurityTests(unittest.TestCase):
             validate_pkce_verifier("a" * 42)
 
     def test_authorization_and_refresh_endpoints_use_the_configured_client(self) -> None:
-        callback = "http://127.0.0.1:8765/callback"
-        self.write_registry([callback])
+        client_id = "https://client.example/oauth/test/client.json"
+        callback = "https://client.example/connector/oauth/test"
+        self.write_registry([callback], client_id=client_id)
         configuration = OAuthConfiguration.load(
             self.registry, "https://tutor.example", "/mcp"
         )
@@ -133,7 +142,7 @@ class OAuthSecurityTests(unittest.TestCase):
         ).decode("ascii").rstrip("=")
         form = {
             "response_type": "code",
-            "client_id": "test-client",
+            "client_id": client_id,
             "redirect_uri": callback,
             "state": "state-123",
             "code_challenge": challenge,
@@ -176,7 +185,7 @@ class OAuthSecurityTests(unittest.TestCase):
         exchanged = _oauth_token_response(
             {
                 "grant_type": "authorization_code",
-                "client_id": "test-client",
+                "client_id": client_id,
                 "redirect_uri": callback,
                 "resource": configuration.resource_uri,
                 "code": code,
@@ -208,7 +217,7 @@ class OAuthSecurityTests(unittest.TestCase):
         refreshed = _oauth_token_response(
             {
                 "grant_type": "refresh_token",
-                "client_id": "test-client",
+                "client_id": client_id,
                 "resource": configuration.resource_uri,
                 "scope": "linguamcp",
                 "refresh_token": tokens["refresh_token"],
@@ -223,7 +232,7 @@ class OAuthSecurityTests(unittest.TestCase):
         replay = _oauth_token_response(
             {
                 "grant_type": "refresh_token",
-                "client_id": "test-client",
+                "client_id": client_id,
                 "resource": configuration.resource_uri,
                 "scope": "linguamcp",
                 "refresh_token": tokens["refresh_token"],

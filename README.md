@@ -263,6 +263,13 @@ The JSON file must have this shape. Replace both example values with the client 
 }
 ```
 
+Client IDs may be HTTPS URLs, as they are for some ChatGPT connectors. Copy the
+exact registered ID and callback; the server matches both literally. On a
+systemd host, set `LINGUAMCP_OAUTH_CLIENTS_FILE` and
+`LINGUAMCP_PUBLIC_BASE_URL` in the service environment and make the JSON file
+readable by the service account. OAuth startup fails if either setting is
+missing. The public base URL is the HTTPS origin without `/mcp`.
+
 Use your public tunnel host with these paths:
 
 ```text
