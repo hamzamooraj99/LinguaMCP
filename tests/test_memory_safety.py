@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -133,6 +134,30 @@ class MemorySafetyTests(unittest.TestCase):
         self.assertFalse(note.exists())
         self.assertEqual(list(note.parent.glob("*.tmp")), [])
         self.assertEqual(list(note.parent.glob(".new-note.*.tmp")), [])
+
+    def test_new_visible_markdown_keeps_default_acl_read_mask(self) -> None:
+        modes: list[tuple[str, int]] = []
+        real_chmod = os.chmod
+
+        def record_mode(path: str | Path, mode: int) -> None:
+            modes.append((Path(path).parent.name, mode))
+            real_chmod(path, mode)
+
+        with patch("memory_storage._has_default_acl", return_value=True), patch(
+            "memory_storage.os.chmod", side_effect=record_mode
+        ):
+            write_note("german", "acl-note.md", "# Note\n\nVisible", "absent", data_root=self.root)
+            private = self.root / "german" / ".backups" / "private.md"
+            memory_storage.atomic_write(private, b"private")
+
+        self.assertIn(("notes", 0o640), modes)
+        self.assertIn((".backups", 0o600), modes)
+
+        with patch("memory_storage._has_default_acl", return_value=False), patch(
+            "memory_storage.os.chmod", side_effect=record_mode
+        ):
+            write_note("german", "private-note.md", "# Note\n\nPrivate", "absent", data_root=self.root)
+        self.assertIn(("notes", 0o600), modes)
 
     def test_audit_failure_does_not_change_success_or_hide_original_error(self) -> None:
         blocking_file = Path(self.temporary_directory.name) / "not-a-directory"

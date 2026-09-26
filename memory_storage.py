@@ -191,8 +191,19 @@ def validate_content(relative: str, content: str) -> bytes:
     return encoded
 
 
-def atomic_write(path: Path, content: bytes) -> None:
-    """Replace one file atomically, preserving its current mode when possible."""
+def _has_default_acl(directory: Path) -> bool:
+    """Check whether a directory grants inherited POSIX ACL permissions."""
+    getxattr = getattr(os, "getxattr", None)
+    if getxattr is None:
+        return False
+    try:
+        return bool(getxattr(directory, "system.posix_acl_default"))
+    except OSError:
+        return False
+
+
+def atomic_write(path: Path, content: bytes, *, use_default_acl: bool = False) -> None:
+    """Replace one file atomically, retaining inherited ACL read access for visible Markdown."""
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
@@ -202,16 +213,16 @@ def atomic_write(path: Path, content: bytes) -> None:
         old_mode = stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         pass
+    inherited_read = use_default_acl and _has_default_acl(parent)
+    mode = (old_mode if old_mode is not None else 0o600) | (stat.S_IRGRP if inherited_read else 0)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=parent)
     temporary = Path(temporary_name)
     try:
-        if old_mode is not None:
-            os.chmod(temporary, old_mode)
-        else:
-            try:
-                os.chmod(temporary, 0o600)
-            except OSError:
-                pass
+        try:
+            os.chmod(temporary, mode)
+        except OSError:
+            if old_mode is not None or inherited_read:
+                raise
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = -1
             stream.write(content)
@@ -383,7 +394,7 @@ def _backup_destination(language_dir: Path, target: str, backup: str, old_bytes:
                 return
         except StorageError as exc:
             raise RecoveryRequiredError("An existing backup cannot be verified.") from exc
-    atomic_write(backup_path, old_bytes)
+    atomic_write(backup_path, old_bytes, use_default_acl=backup.startswith("archives/"))
 
 
 def _receipt_path(language_dir: Path, operation_id: str) -> Path:
@@ -477,7 +488,7 @@ def _finish_pending(language_dir: Path, pending: Path) -> dict[str, Any]:
         if backup is not None and item.get("before_version") != ABSENT_VERSION:
             _backup_destination(language_dir, relative, backup, old_bytes)
         if current != item.get("after_version"):
-            atomic_write(target, new_bytes)
+            atomic_write(target, new_bytes, use_default_acl=True)
     return _write_receipt(language_dir, manifest)
 
 
@@ -666,7 +677,7 @@ def save_single_file(
             raise StorageError("Invalid backup destination.")
         old = read_limited_bytes(path)
         _backup_destination(language_dir, relative, backup, old)
-    atomic_write(path, new_bytes)
+    atomic_write(path, new_bytes, use_default_acl=True)
     return version_bytes(new_bytes)
 
 

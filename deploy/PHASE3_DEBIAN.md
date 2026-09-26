@@ -85,7 +85,9 @@ fi
 ```
 
 Apply read/traverse access to existing directories and files. The default ACL
-on every directory is inherited by future learner files and subdirectories:
+on every directory is inherited by future learner files and subdirectories.
+The writer keeps that inherited read access effective on new visible Markdown
+files; private recovery files remain owner-only:
 
 ```bash
 sudo setfacl -m u:linguamcp-viewer:--x /var/lib/linguamcp
@@ -101,6 +103,15 @@ sudo getfacl -p /var/lib/linguamcp | sed -n '1,24p'
 
 The `linguamcp-viewer` entry on directories must be `r-x`, and on files it
 must be `r--`. There must be no `w` in that user's ACL entry.
+
+Files created before the inherited-ACL write fix may still list in the viewer
+but fail to open. For each affected visible Markdown file, verify the viewer
+cannot read it and then restore only its read permission, for example:
+
+```bash
+sudo -u linguamcp-viewer test -r /var/lib/linguamcp/german/current-lesson-contract.md || \
+  sudo setfacl -m u:linguamcp-viewer:r-- /var/lib/linguamcp/german/current-lesson-contract.md
+```
 
 ## 6. Verify repository access and failed writes
 
