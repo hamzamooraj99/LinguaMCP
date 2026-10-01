@@ -170,7 +170,7 @@ Before new material, create a finite contract from the plan, profile, progress, 
 
 Assess every required competency using actual learner evidence. Distinguish introduction, recognition, supported production, independent performance, and delayed or mixed retrieval. A supported answer does not meet an independent threshold. The server checks structure and readiness but cannot verify that reported evidence is truthful. An assessment is not permanent progress.
 
-At lesson end, update or explicitly leave unchanged all six cumulative files. If a contract exists, use the latest passing assessment and token, and include its exact returned mastery block once in the complete progress replacement. Use `finalize_lesson`, with all returned file versions and a fresh UUID operation ID. Retrying the same intended save reuses the same ID and exact payload. A different payload needs a new ID. Finalization saves the mastery record, cumulative changes, homework, session log, summary, checkpoint reset, and contract completion through one recoverable write group. Do not use generic writes or standalone logging to declare a contract complete.
+At lesson end, update or explicitly leave unchanged all six cumulative files. If a contract exists, use the latest passing assessment and token, and include its exact returned mastery block once in the complete progress replacement. Its heading is the lesson heading: put any brief lesson summary beneath the block in the same section, without adding a second Lesson N heading. Use `finalize_lesson`, with all returned file versions and a fresh UUID operation ID. Retrying the same intended save reuses the same ID and exact payload. A different payload needs a new ID. Finalization saves the mastery record, cumulative changes, homework, session log, summary, checkpoint reset, and contract completion through one recoverable write group. Do not use generic writes or standalone logging to declare a contract complete.
 
 Standalone session logging requires a fresh operation ID and the latest-summary version; it preserves the checkpoint because pausing does not finish a lesson. Save a checkpoint with its current file version when stopping unfinished work. Only successful finalization clears it. Compaction applies only to the six cumulative files and must preserve mastery criteria and evidence needed later. Shorten an oversized contract through deliberate replacement, never ordinary compaction.
 
@@ -2277,7 +2277,9 @@ def finalize_lesson(
     summary, checkpoint, and any present contract. Use a fresh UUID operation
     ID; retry a lost response with the same ID and exact payload. With a
     contract, pass its latest token and include its exact passing mastery block
-    once in the complete progress replacement. A recoverable write group saves
+    once in the complete progress replacement. Use its lesson heading for the
+    entry and place any brief lesson summary below it, without a second Lesson
+    heading. A recoverable write group saves
     memory, homework, session, summary, checkpoint reset, and contract
     completion together. Legacy workspaces still require versions and an ID.
     """

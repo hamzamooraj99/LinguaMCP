@@ -108,7 +108,10 @@ detail is genuinely needed; do not load every archive into context.
    Also prepare the structured homework and concise final session summary.
    Put the exact `mastery_record_markdown` returned by a passing assessment into
    the full `02-progress.md` replacement exactly once. Use the current contract
-   token; do not copy the full contract or add a made-up score.
+   token; do not copy the full contract or add a made-up score. The mastery
+   block already has the lesson heading. Put any brief narrative summary after
+   that block under a `### Lesson Summary` heading in the same lesson section;
+   do not add another `## Lesson N` heading.
 3. Call `finalize_lesson` with all six cumulative decisions, current hashes for
    those files plus homework, summary, checkpoint, and contract, and a fresh
    UUID `operation_id`. Include the contract's file hash and current lifecycle
