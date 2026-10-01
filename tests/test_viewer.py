@@ -279,6 +279,30 @@ class ViewerAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("Gr\u00fc\u00dfe", response.json()["html"])
 
+    def test_lesson_mastery_markers_are_hidden_only_in_preview(self) -> None:
+        marker_id = "501dd7ca-4302-4480-af19-2eea29f8c21c"
+        content = (
+            "# Lesson 6 complete\n\n"
+            f"<!-- lesson-mastery:{marker_id} -->\n\n"
+            "## Mastery evidence\n\nDestination question demonstrated.\n"
+            f"<!-- /lesson-mastery:{marker_id} -->\n\n"
+            "<!-- unrelated comment -->\n\n"
+            f"```\n<!-- lesson-mastery:{marker_id} -->\n```\n"
+        )
+        path = self._write("german/02-progress.md", content)
+
+        response = self.request("GET", "/api/languages/german/documents/02-progress.md")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.json()["html"]
+        self.assertIn("Lesson 6 complete", html)
+        self.assertIn("Mastery evidence", html)
+        self.assertIn("Destination question demonstrated.", html)
+        self.assertNotIn("/lesson-mastery:", html)
+        self.assertEqual(html.count("lesson-mastery:"), 1)  # Literal code example remains.
+        self.assertIn("&lt;!-- unrelated comment --&gt;", html)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
+
     def test_invalid_languages_and_plain_or_encoded_traversal_are_rejected(self) -> None:
         with self.assertRaises(InvalidRequestError):
             validate_relative_path("../outside.md")
